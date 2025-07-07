@@ -18,9 +18,6 @@ COPY pyproject.toml .
 COPY LICENSE .
 COPY README.md .
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash nmapuser
-
 # Install Python dependencies (create lockfile and install)
 RUN uv sync
 
