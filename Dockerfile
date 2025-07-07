@@ -1,0 +1,30 @@
+# Minimal Dockerfile for nmap-mcp server
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    nmap \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install uv
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files
+COPY nmap_mcp.py .
+COPY pyproject.toml .
+
+# Install Python dependencies
+RUN uv sync --frozen
+
+# Create non-root user for security
+RUN useradd --create-home --shell /bin/bash nmapuser
+USER nmapuser
+
+# Expose default SSE port
+EXPOSE 3001
+
+# Default command runs in foreground mode for container use
+CMD ["uv", "run", "nmap_mcp.py", "-f", "--sse", "--host", "0.0.0.0"]
