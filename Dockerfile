@@ -15,13 +15,14 @@ WORKDIR /app
 # Copy project files
 COPY nmap_mcp.py .
 COPY pyproject.toml .
-
-# Install Python dependencies
-RUN uv sync --frozen
+COPY LICENSE .
+COPY README.md .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash nmapuser
-USER nmapuser
+
+# Install Python dependencies (create lockfile and install)
+RUN uv sync
 
 # Expose default SSE port
 EXPOSE 3001
