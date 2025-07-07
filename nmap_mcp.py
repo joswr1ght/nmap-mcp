@@ -674,7 +674,7 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
 
         return EventSourceResponse(event_generator())
 
-    app.add_route("/mcp", sse_endpoint)
+    app.add_route("/sse", sse_endpoint)
 
     # Add a simple info endpoint
     async def info_endpoint(request):
