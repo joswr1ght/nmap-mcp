@@ -25,4 +25,4 @@ RUN uv sync
 EXPOSE 3001
 
 # Default command runs in foreground mode for container use
-CMD ["uv", "run", "nmap_mcp.py", "-f", "--sse", "--host", "0.0.0.0"]
+CMD ["uv", "run", "nmap_mcp.py", "-f", "--sse"]
