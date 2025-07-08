@@ -657,24 +657,137 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
 
     async def sse_endpoint(request):
         async def event_generator():
-            # Send initial connection message
+            # Send MCP initialization response
             yield {
-                "event": "connected",
-                "data": json.dumps({"message": "Connected to nmap-mcp server"})
+                "event": "message",
+                "data": json.dumps({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {},
+                            "resources": {}
+                        },
+                        "serverInfo": {
+                            "name": "nmap-mcp",
+                            "version": "1.0.0"
+                        }
+                    }
+                })
             }
 
-            # Keep connection alive and handle tool calls
+            # Send tools list
+            tools = await nmap_server.list_tools()
+            yield {
+                "event": "message",
+                "data": json.dumps({
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/list_changed",
+                    "params": {}
+                })
+            }
+
+            # Keep connection alive with minimal heartbeat
             while True:
-                await asyncio.sleep(1)
-                # In a real implementation, you'd handle MCP protocol messages here
+                await asyncio.sleep(30)  # Reduced frequency
                 yield {
-                    "event": "heartbeat",
-                    "data": json.dumps({"timestamp": datetime.now().isoformat()})
+                    "event": "ping",
+                    "data": ""
                 }
 
         return EventSourceResponse(event_generator())
 
+    # Add MCP JSON-RPC endpoint for handling requests
+    async def mcp_rpc_endpoint(request):
+        try:
+            body = await request.json()
+
+            # Handle different MCP methods
+            if body.get("method") == "tools/list":
+                tools = await nmap_server.list_tools()
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "tools": [
+                            {
+                                "name": tool.name,
+                                "description": tool.description,
+                                "inputSchema": tool.inputSchema
+                            }
+                            for tool in tools.tools
+                        ]
+                    }
+                }
+            elif body.get("method") == "tools/call":
+                params = body.get("params", {})
+                request_obj = CallToolRequest(
+                    name=params.get("name"),
+                    arguments=params.get("arguments", {})
+                )
+                result = await nmap_server.call_tool(request_obj)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "content": [
+                            {
+                                "type": content.type,
+                                "text": content.text
+                            }
+                            for content in result.content
+                        ]
+                    }
+                }
+            elif body.get("method") == "initialize":
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {
+                            "tools": {},
+                            "resources": {}
+                        },
+                        "serverInfo": {
+                            "name": "nmap-mcp",
+                            "version": "1.0.0"
+                        }
+                    }
+                }
+            else:
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {
+                        "code": -32601,
+                        "message": f"Method not found: {body.get('method')}"
+                    }
+                }
+
+            return Response(
+                json.dumps(response),
+                media_type="application/json"
+            )
+
+        except Exception as e:
+            error_response = {
+                "jsonrpc": "2.0",
+                "id": body.get("id") if 'body' in locals() else None,
+                "error": {
+                    "code": -32603,
+                    "message": f"Internal error: {str(e)}"
+                }
+            }
+            return Response(
+                json.dumps(error_response),
+                media_type="application/json",
+                status_code=500
+            )
+
     app.add_route("/sse", sse_endpoint)
+    app.add_route("/mcp", mcp_rpc_endpoint, methods=["POST"])
 
     # Add a simple info endpoint
     async def info_endpoint(request):
