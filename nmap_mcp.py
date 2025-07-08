@@ -822,12 +822,51 @@ def signal_handler(signum, frame):
     os._exit(0)
 
 
-async def main():
-    global server_instance
+def daemonize():
+    """Daemonize the current process."""
+    try:
+        # First fork
+        pid = os.fork()
+        if pid > 0:
+            # Parent process, exit
+            sys.exit(0)
+    except OSError as e:
+        logger.error(f"First fork failed: {e}")
+        sys.exit(1)
 
+    # Decouple from parent environment
+    os.chdir("/")
+    os.setsid()
+    os.umask(0)
+
+    try:
+        # Second fork
+        pid = os.fork()
+        if pid > 0:
+            # Parent process, exit
+            sys.exit(0)
+    except OSError as e:
+        logger.error(f"Second fork failed: {e}")
+        sys.exit(1)
+
+    # Redirect standard file descriptors
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+    # Redirect stdin, stdout, stderr to /dev/null
+    with open(os.devnull, 'r') as dev_null_r:
+        os.dup2(dev_null_r.fileno(), sys.stdin.fileno())
+
+    with open(os.devnull, 'w') as dev_null_w:
+        os.dup2(dev_null_w.fileno(), sys.stdout.fileno())
+        os.dup2(dev_null_w.fileno(), sys.stderr.fileno())
+
+
+def main_sync():
+    """Synchronous main function that handles daemonization before starting asyncio."""
     parser = argparse.ArgumentParser(description="Nmap MCP Server")
-    parser.add_argument("-f", "--foreground", action="store_true",
-                       help="Run in foreground mode (default is daemon)")
+    parser.add_argument("-d", "--daemon", action="store_true",
+                       help="Run in daemon mode (only available with --sse)")
     parser.add_argument("--sse", action="store_true",
                        help="Enable SSE mode for web clients")
     parser.add_argument("--port", type=int, default=3001,
@@ -837,11 +876,49 @@ async def main():
 
     args = parser.parse_args()
 
+    # Validate arguments
+    if args.daemon and not args.sse:
+        print("Error: Daemon mode (--daemon) is only available with SSE mode (--sse)")
+        print("Stdio mode requires interactive I/O and cannot be daemonized.")
+        sys.exit(1)
+
     # Set up logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
+    if args.sse and args.daemon:
+        # File logging for SSE daemon mode
+        log_file = "/tmp/nmap-mcp.log"
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            filename=log_file,
+            filemode='a'
+        )
+    else:
+        # Console logging for all other modes
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+
+    # Daemonize only for SSE daemon mode
+    if args.sse and args.daemon:
+        logger.info("Daemonizing SSE server process...")
+        daemonize()
+        # Re-setup logging after daemonization since file descriptors changed
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            filename=log_file,
+            filemode='a',
+            force=True  # Force reconfiguration
+        )
+
+    # Now run the async main function
+    asyncio.run(main_async(args))
+
+
+async def main_async(args):
+    """Async main function that runs after daemonization."""
+    global server_instance
 
     # Register signal handlers
     signal.signal(signal.SIGINT, signal_handler)
@@ -866,7 +943,11 @@ async def main():
             logger.error("SSE mode requires starlette and sse-starlette packages")
             sys.exit(1)
 
-        logger.info(f"Starting Nmap MCP Server in SSE mode on {args.host}:{args.port}")
+        if args.daemon:
+            logger.info(f"Starting Nmap MCP Server in SSE daemon mode on {args.host}:{args.port}")
+        else:
+            logger.info(f"Starting Nmap MCP Server in SSE mode on {args.host}:{args.port}")
+
         app = await create_sse_server(nmap_server, args.host, args.port)
 
         config = uvicorn.Config(
@@ -878,10 +959,9 @@ async def main():
         server = uvicorn.Server(config)
         await server.serve()
     else:
-        # Run stdio server
+        # Run stdio server (always in foreground - no daemon mode for stdio)
         logger.info("Starting Nmap MCP Server in stdio mode")
-        if not args.foreground:
-            logger.info("Running in daemon mode (use -f for foreground)")
+        logger.info("Stdio mode runs in foreground and communicates via stdin/stdout")
 
         try:
             async with stdio_server() as (read_stream, write_stream):
@@ -903,4 +983,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main_sync()
