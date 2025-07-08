@@ -34,6 +34,7 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolRequest,
+    CallToolRequestParams,
     CallToolResult,
     ListResourcesRequest,
     ListResourcesResult,
@@ -235,22 +236,25 @@ class NmapMCPServer:
     async def call_tool(self, request: CallToolRequest) -> CallToolResult:
         """Handle tool calls."""
         try:
-            if request.name == "tcp_scan":
-                return await self._tcp_scan(request.arguments)
-            elif request.name == "version_scan":
-                return await self._version_scan(request.arguments)
-            elif request.name == "script_scan":
-                return await self._script_scan(request.arguments)
-            elif request.name == "search_scripts":
-                return await self._search_scripts(request.arguments)
-            elif request.name == "get_scan_history":
-                return await self._get_scan_history(request.arguments)
+            tool_name = request.params.name
+            tool_arguments = request.params.arguments or {}
+
+            if tool_name == "tcp_scan":
+                return await self._tcp_scan(tool_arguments)
+            elif tool_name == "version_scan":
+                return await self._version_scan(tool_arguments)
+            elif tool_name == "script_scan":
+                return await self._script_scan(tool_arguments)
+            elif tool_name == "search_scripts":
+                return await self._search_scripts(tool_arguments)
+            elif tool_name == "get_scan_history":
+                return await self._get_scan_history(tool_arguments)
             else:
                 return CallToolResult(
-                    content=[TextContent(type="text", text=f"Unknown tool: {request.name}")]
+                    content=[TextContent(type="text", text=f"Unknown tool: {tool_name}")]
                 )
         except Exception as e:
-            logger.error(f"Error in tool {request.name}: {e}")
+            logger.error(f"Error in tool {request.params.name if request.params else 'unknown'}: {e}")
             return CallToolResult(
                 content=[TextContent(type="text", text=f"Error: {str(e)}")]
             )
@@ -780,11 +784,27 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                 }
             elif body.get("method") == "tools/call":
                 params = body.get("params", {})
-                request_obj = CallToolRequest(
-                    name=params.get("name"),
-                    arguments=params.get("arguments", {})
-                )
-                result = await nmap_server.call_tool(request_obj)
+                logger.info(f"Tool call params: {params}")
+
+                # Create the CallToolRequest object with correct structure
+                try:
+                    # Create the params object first
+                    tool_params = CallToolRequestParams(
+                        name=params.get("name"),
+                        arguments=params.get("arguments", {})
+                    )
+
+                    # Create the CallToolRequest object
+                    request_obj = CallToolRequest(
+                        method="tools/call",
+                        params=tool_params
+                    )
+                    logger.info(f"Created CallToolRequest successfully: {request_obj}")
+                    result = await nmap_server.call_tool(request_obj)
+                except Exception as e:
+                    logger.error(f"Failed to create CallToolRequest: {e}")
+                    logger.error(f"Params structure: {params}")
+                    raise
                 response = {
                     "jsonrpc": "2.0",
                     "id": message_id,
