@@ -649,20 +649,99 @@ class NmapMCPServer:
 
 
 async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
-    """Create a simple SSE server for web-based MCP clients."""
+    """Create SSE server following MCP SSE specification."""
     if not SSE_AVAILABLE:
         raise Exception("SSE dependencies not available. Install starlette and sse-starlette.")
 
+    from starlette.middleware.cors import CORSMiddleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    from starlette.responses import Response as StarletteResponse
+
     app = Starlette()
 
+    # Add request logging middleware
+    class RequestLoggingMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            logger.info(f"Request: {request.method} {request.url} from {request.client}")
+            logger.info(f"Headers: {dict(request.headers)}")
+            response = await call_next(request)
+            logger.info(f"Response: {response.status_code}")
+            return response
+
+    app.add_middleware(RequestLoggingMiddleware)
+    # Store response queues for active SSE connections
+    response_queues = {}
+
     async def sse_endpoint(request):
+        """SSE endpoint that sends the JSON-RPC endpoint URL and handles responses."""
+        logger.info(f"New SSE connection from {request.client}")
+        connection_id = id(request)
+        response_queue = asyncio.Queue()
+        response_queues[connection_id] = response_queue
+
         async def event_generator():
-            # Send MCP initialization response
-            yield {
-                "event": "message",
-                "data": json.dumps({
+            try:
+                # First, send the endpoint URL where clients should POST JSON-RPC requests
+                # Determine the appropriate hostname based on the client
+                user_agent = request.headers.get("user-agent", "").lower()
+                if "docker" in user_agent or request.client.host.startswith("192.168"):
+                    # Docker client - use host.docker.internal for macOS Docker Desktop
+                    endpoint_host = "host.docker.internal"
+                elif host == "0.0.0.0":
+                    # Localhost binding - use 127.0.0.1
+                    endpoint_host = "127.0.0.1"
+                else:
+                    # Use the configured host
+                    endpoint_host = host
+                    
+                endpoint_url = f"http://{endpoint_host}:{port}/mcp"
+                logger.info(f"Sending endpoint URL: {endpoint_url}")
+                yield {
+                    "event": "endpoint",
+                    "data": endpoint_url
+                }
+
+                # Listen for responses to send back
+                while True:
+                    try:
+                        # Wait for response with timeout
+                        response = await asyncio.wait_for(response_queue.get(), timeout=30.0)
+                        yield {
+                            "event": "message",
+                            "data": json.dumps(response)
+                        }
+                    except asyncio.TimeoutError:
+                        # Send heartbeat if no response within timeout
+                        yield {
+                            "event": "ping",
+                            "data": ""
+                        }
+
+            except Exception as e:
+                logger.error(f"SSE connection error: {e}")
+            finally:
+                # Clean up connection
+                logger.info(f"Cleaning up SSE connection {connection_id}")
+                if connection_id in response_queues:
+                    del response_queues[connection_id]
+
+        return EventSourceResponse(event_generator())
+
+    # JSON-RPC endpoint for handling MCP requests
+    async def mcp_rpc_endpoint(request):
+        """Handle JSON-RPC requests and send responses via SSE."""
+        try:
+            body = await request.json()
+            logger.debug(f"Received JSON-RPC request: {body}")
+
+            # Handle different MCP methods
+            response = None
+
+            if body.get("method") == "initialize":
+                response = {
                     "jsonrpc": "2.0",
-                    "id": 1,
+                    "id": body.get("id"),
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
@@ -674,37 +753,8 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                             "version": "1.0.0"
                         }
                     }
-                })
-            }
-
-            # Send tools list
-            tools = await nmap_server.list_tools()
-            yield {
-                "event": "message",
-                "data": json.dumps({
-                    "jsonrpc": "2.0",
-                    "method": "notifications/tools/list_changed",
-                    "params": {}
-                })
-            }
-
-            # Keep connection alive with minimal heartbeat
-            while True:
-                await asyncio.sleep(30)  # Reduced frequency
-                yield {
-                    "event": "ping",
-                    "data": ""
                 }
-
-        return EventSourceResponse(event_generator())
-
-    # Add MCP JSON-RPC endpoint for handling requests
-    async def mcp_rpc_endpoint(request):
-        try:
-            body = await request.json()
-
-            # Handle different MCP methods
-            if body.get("method") == "tools/list":
+            elif body.get("method") == "tools/list":
                 tools = await nmap_server.list_tools()
                 response = {
                     "jsonrpc": "2.0",
@@ -740,20 +790,38 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                         ]
                     }
                 }
-            elif body.get("method") == "initialize":
+            elif body.get("method") == "resources/list":
+                resources = await nmap_server.list_resources()
                 response = {
                     "jsonrpc": "2.0",
                     "id": body.get("id"),
                     "result": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {
-                            "tools": {},
-                            "resources": {}
-                        },
-                        "serverInfo": {
-                            "name": "nmap-mcp",
-                            "version": "1.0.0"
-                        }
+                        "resources": [
+                            {
+                                "uri": resource.uri,
+                                "name": resource.name,
+                                "description": resource.description,
+                                "mimeType": resource.mimeType
+                            }
+                            for resource in resources.resources
+                        ]
+                    }
+                }
+            elif body.get("method") == "resources/read":
+                params = body.get("params", {})
+                request_obj = ReadResourceRequest(uri=params.get("uri"))
+                result = await nmap_server.read_resource(request_obj)
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "result": {
+                        "contents": [
+                            {
+                                "type": content.type,
+                                "text": content.text
+                            }
+                            for content in result.contents
+                        ]
                     }
                 }
             else:
@@ -766,12 +834,25 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                     }
                 }
 
+            logger.debug(f"Sending JSON-RPC response: {response}")
+
+            # Send response to all active SSE connections
+            # In a real implementation, you'd need to match the specific connection
+            # For now, send to all connections (works for single client)
+            for queue in response_queues.values():
+                try:
+                    queue.put_nowait(response)
+                except asyncio.QueueFull:
+                    logger.warning("Response queue full, dropping response")
+
+            # Return simple HTTP acknowledgment
             return Response(
-                json.dumps(response),
+                json.dumps({"status": "accepted"}),
                 media_type="application/json"
             )
 
         except Exception as e:
+            logger.error(f"Error in MCP RPC endpoint: {e}")
             error_response = {
                 "jsonrpc": "2.0",
                 "id": body.get("id") if 'body' in locals() else None,
@@ -780,23 +861,33 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                     "message": f"Internal error: {str(e)}"
                 }
             }
+
+            # Send error to all active SSE connections
+            for queue in response_queues.values():
+                try:
+                    queue.put_nowait(error_response)
+                except asyncio.QueueFull:
+                    logger.warning("Response queue full, dropping error response")
+
             return Response(
-                json.dumps(error_response),
+                json.dumps({"status": "error"}),
                 media_type="application/json",
                 status_code=500
             )
 
-    app.add_route("/sse", sse_endpoint)
+    # Mount SSE endpoint at root for MCP compatibility
+    app.add_route("/", sse_endpoint)
     app.add_route("/mcp", mcp_rpc_endpoint, methods=["POST"])
 
-    # Add a simple info endpoint
+    # Add a simple info endpoint for debugging
     async def info_endpoint(request):
         tools = await nmap_server.list_tools()
         return Response(
             json.dumps({
                 "server": "nmap-mcp",
                 "version": "1.0.0",
-                "available_tools": [tool.name for tool in tools.tools]
+                "available_tools": [tool.name for tool in tools.tools],
+                "active_connections": len(response_queues)
             }),
             media_type="application/json"
         )
