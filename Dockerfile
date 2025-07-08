@@ -25,4 +25,5 @@ RUN uv sync
 EXPOSE 3001
 
 # Default command runs in foreground mode for container use
-CMD ["uv", "run", "nmap_mcp.py", "-f", "--sse"]
+# Bind to 0.0.0.0 so the container can accept connections from outside
+CMD ["uv", "run", "nmap_mcp.py", "--sse", "--host", "0.0.0.0", "--port", "3001"]

@@ -683,19 +683,19 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
         async def event_generator():
             try:
                 # First, send the endpoint URL where clients should POST JSON-RPC requests
-                # Determine the appropriate hostname based on the client
-                user_agent = request.headers.get("user-agent", "").lower()
-                if "docker" in user_agent or request.client.host.startswith("192.168"):
-                    # Docker client - use host.docker.internal for macOS Docker Desktop
-                    endpoint_host = "host.docker.internal"
+                # Use the Host header from the request to ensure origin matching
+                request_host = request.headers.get("host")
+
+                if request_host:
+                    # Use the exact host from the request to ensure origin matching
+                    endpoint_url = f"http://{request_host}/mcp"
                 elif host == "0.0.0.0":
-                    # Localhost binding - use 127.0.0.1
-                    endpoint_host = "127.0.0.1"
+                    # Fallback for 0.0.0.0 binding
+                    endpoint_url = f"http://127.0.0.1:{port}/mcp"
                 else:
                     # Use the configured host
-                    endpoint_host = host
-                    
-                endpoint_url = f"http://{endpoint_host}:{port}/mcp"
+                    endpoint_url = f"http://{host}:{port}/mcp"
+
                 logger.info(f"Sending endpoint URL: {endpoint_url}")
                 yield {
                     "event": "endpoint",
@@ -737,11 +737,12 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
 
             # Handle different MCP methods
             response = None
+            message_id = body.get("id")  # Can be None for notifications
 
             if body.get("method") == "initialize":
                 response = {
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": message_id,
                     "result": {
                         "protocolVersion": "2024-11-05",
                         "capabilities": {
@@ -754,11 +755,18 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                         }
                     }
                 }
+            elif body.get("method") == "notifications/initialized":
+                # This is a notification, no response needed
+                logger.info("Received initialized notification")
+                return Response(
+                    json.dumps({"status": "accepted"}),
+                    media_type="application/json"
+                )
             elif body.get("method") == "tools/list":
                 tools = await nmap_server.list_tools()
                 response = {
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": message_id,
                     "result": {
                         "tools": [
                             {
@@ -779,7 +787,7 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                 result = await nmap_server.call_tool(request_obj)
                 response = {
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": message_id,
                     "result": {
                         "content": [
                             {
@@ -794,7 +802,7 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                 resources = await nmap_server.list_resources()
                 response = {
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": message_id,
                     "result": {
                         "resources": [
                             {
@@ -813,7 +821,7 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                 result = await nmap_server.read_resource(request_obj)
                 response = {
                     "jsonrpc": "2.0",
-                    "id": body.get("id"),
+                    "id": message_id,
                     "result": {
                         "contents": [
                             {
@@ -825,25 +833,34 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                     }
                 }
             else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": body.get("id"),
-                    "error": {
-                        "code": -32601,
-                        "message": f"Method not found: {body.get('method')}"
+                # Only send error responses for requests (with id), not notifications
+                if message_id is not None:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": message_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"Method not found: {body.get('method')}"
+                        }
                     }
-                }
+                else:
+                    # For unknown notifications, just acknowledge
+                    logger.warning(f"Unknown notification method: {body.get('method')}")
+                    return Response(
+                        json.dumps({"status": "accepted"}),
+                        media_type="application/json"
+                    )
 
-            logger.debug(f"Sending JSON-RPC response: {response}")
+            # Only send response via SSE if we have a response (i.e., for requests, not notifications)
+            if response:
+                logger.debug(f"Sending JSON-RPC response: {response}")
 
-            # Send response to all active SSE connections
-            # In a real implementation, you'd need to match the specific connection
-            # For now, send to all connections (works for single client)
-            for queue in response_queues.values():
-                try:
-                    queue.put_nowait(response)
-                except asyncio.QueueFull:
-                    logger.warning("Response queue full, dropping response")
+                # Send response to all active SSE connections
+                for queue in response_queues.values():
+                    try:
+                        queue.put_nowait(response)
+                    except asyncio.QueueFull:
+                        logger.warning("Response queue full, dropping response")
 
             # Return simple HTTP acknowledgment
             return Response(
