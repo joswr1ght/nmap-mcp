@@ -24,8 +24,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional
 import argparse
 import signal
 
@@ -36,9 +35,7 @@ from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
-    ListResourcesRequest,
     ListResourcesResult,
-    ListToolsRequest,
     ListToolsResult,
     ReadResourceRequest,
     ReadResourceResult,
@@ -92,7 +89,8 @@ class NmapMCPServer:
                         },
                         "ports": {
                             "type": "string",
-                            "description": "Port specification (e.g., '80,443', '1-1000', 'all', or 'top-N' where N is number)"
+                            "description": ("Port specification (e.g., '80,443', '1-1000', "
+                                            "'all', or 'top-N' where N is number)")
                         },
                         "scan_type": {
                             "type": "string",
@@ -206,7 +204,8 @@ class NmapMCPServer:
                         },
                         "category": {
                             "type": "string",
-                            "description": "Filter by script category (auth, broadcast, brute, default, discovery, dos, exploit, external, fuzzer, intrusive, malware, safe, version, vuln)"
+                            "description": ("Filter by script category (auth, broadcast, brute, default, discovery, "
+                                            "dos, exploit, external, fuzzer, intrusive, malware, safe, version, vuln)")
                         }
                     },
                     "required": ["query"]
@@ -263,15 +262,15 @@ class NmapMCPServer:
         """Check if nmap is available on the system."""
         try:
             result = subprocess.run(["nmap", "--version"],
-                                  capture_output=True, text=True, timeout=10)
+                                    capture_output=True, text=True, timeout=10)
             return result.returncode == 0
         except (subprocess.TimeoutExpired, FileNotFoundError):
             return False
 
     def _build_nmap_command(self, targets: List[str], ports: str,
-                           scan_type: str = "connect", timing: str = "T3",
-                           skip_ping: bool = False, verbose: bool = False,
-                           version_scan: bool = False, scripts: Optional[str] = None) -> List[str]:
+                            scan_type: str = "connect", timing: str = "T3",
+                            skip_ping: bool = False, verbose: bool = False,
+                            version_scan: bool = False, scripts: Optional[str] = None) -> List[str]:
         """Build nmap command with specified options."""
         cmd = ["nmap"]
 
@@ -388,7 +387,7 @@ class NmapMCPServer:
             port_pattern = r'<port protocol="([^"]+)" portid="([^"]+)".*?<state state="([^"]+)"'
             ports = re.findall(port_pattern, host_xml, re.DOTALL)
             host_info["ports"] = [{"protocol": prot, "port": port, "state": state}
-                                for prot, port, state in ports]
+                                  for prot, port, state in ports]
 
             parsed["hosts"].append(host_info)
 
@@ -657,10 +656,8 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
     if not SSE_AVAILABLE:
         raise Exception("SSE dependencies not available. Install starlette and sse-starlette.")
 
-    from starlette.middleware.cors import CORSMiddleware
     from starlette.middleware.base import BaseHTTPMiddleware
     from starlette.requests import Request
-    from starlette.responses import Response as StarletteResponse
 
     app = Starlette()
 
@@ -719,7 +716,7 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                         # Send heartbeat as SSE comment to avoid unknown event warning
                         yield {
                             "event": None,  # This creates a comment line
-                            "data": ": heartbeat"
+                            "data": "heartbeat"
                         }
 
             except Exception as e:
@@ -994,13 +991,13 @@ def main_sync():
     """Synchronous main function that handles daemonization before starting asyncio."""
     parser = argparse.ArgumentParser(description="Nmap MCP Server")
     parser.add_argument("-d", "--daemon", action="store_true",
-                       help="Run in daemon mode (only available with --sse)")
+                        help="Run in daemon mode (only available with --sse)")
     parser.add_argument("--sse", action="store_true",
-                       help="Enable SSE mode for web clients")
+                        help="Enable SSE mode for web clients")
     parser.add_argument("--port", type=int, default=3001,
-                       help="Port for SSE server (default: 3001)")
+                        help="Port for SSE server (default: 3001)")
     parser.add_argument("--host", default="localhost",
-                       help="Host for SSE server (default: localhost)")
+                        help="Host for SSE server (default: localhost)")
 
     args = parser.parse_args()
 
