@@ -705,19 +705,12 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
 
                 # Listen for responses to send back
                 while True:
-                    try:
-                        # Wait for response with timeout
-                        response = await asyncio.wait_for(response_queue.get(), timeout=30.0)
-                        yield {
-                            "event": "message",
-                            "data": json.dumps(response)
-                        }
-                    except asyncio.TimeoutError:
-                        # Send heartbeat as SSE comment to avoid unknown event warning
-                        yield {
-                            "event": None,  # This creates a comment line
-                            "data": "heartbeat"
-                        }
+                    # Wait for response indefinitely (no timeout)
+                    response = await response_queue.get()
+                    yield {
+                        "event": "message",
+                        "data": json.dumps(response)
+                    }
 
             except Exception as e:
                 logger.error(f"SSE connection error: {e}")
