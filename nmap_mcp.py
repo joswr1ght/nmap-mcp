@@ -716,10 +716,10 @@ async def create_sse_server(nmap_server: 'NmapMCPServer', host: str, port: int):
                             "data": json.dumps(response)
                         }
                     except asyncio.TimeoutError:
-                        # Send heartbeat if no response within timeout
+                        # Send heartbeat as SSE comment to avoid unknown event warning
                         yield {
-                            "event": "ping",
-                            "data": ""
+                            "event": None,  # This creates a comment line
+                            "data": ": heartbeat"
                         }
 
             except Exception as e:
