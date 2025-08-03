@@ -30,6 +30,7 @@ import signal
 
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
+from mcp.types import ServerCapabilities
 from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolRequest,
@@ -67,11 +68,33 @@ class NmapMCPServer:
         self.server = Server("nmap-mcp")
         self.scan_counter = 0
 
-        # Register handlers
-        self.server.list_tools = self.list_tools
-        self.server.call_tool = self.call_tool
-        self.server.list_resources = self.list_resources
-        self.server.read_resource = self.read_resource
+        # Register handlers using decorators for stdio mode
+        @self.server.list_tools()
+        async def handle_list_tools():
+            result = await self.list_tools()
+            return result.tools
+
+        @self.server.call_tool()
+        async def handle_call_tool(name: str, arguments: dict):
+            # Create a proper CallToolRequest for reusing existing logic
+            request = CallToolRequest(
+                method="tools/call",
+                params=CallToolRequestParams(name=name, arguments=arguments)
+            )
+            result = await self.call_tool(request)
+            return result.content
+
+        @self.server.list_resources()
+        async def handle_list_resources():
+            result = await self.list_resources()
+            return result.resources
+
+        @self.server.read_resource()
+        async def handle_read_resource(uri: str):
+            # Create a proper ReadResourceRequest for reusing existing logic
+            request = ReadResourceRequest(uri=uri)
+            result = await self.read_resource(request)
+            return result.contents
 
     async def list_tools(self) -> ListToolsResult:
         """List available Nmap tools."""
@@ -1087,9 +1110,9 @@ async def main_async(args):
                     read_stream, write_stream, InitializationOptions(
                         server_name="nmap-mcp",
                         server_version="1.0.0",
-                        capabilities=nmap_server.server.get_capabilities(
-                            notification_options=None,
-                            experimental_capabilities=None,
+                        capabilities=ServerCapabilities(
+                            tools={},
+                            resources={}
                         ),
                     )
                 )
