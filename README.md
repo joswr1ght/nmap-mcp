@@ -55,7 +55,7 @@ docker build -t nmap-mcp .
 docker run -p 3001:3001 nmap-mcp
 
 # Run in stdio mode (for direct MCP client connection)
-docker run -i nmap-mcp uv run nmap_mcp.py -f
+docker run -i nmap-mcp uv run nmap_mcp.py
 ```
 
 ## Usage
@@ -66,7 +66,7 @@ docker run -i nmap-mcp uv run nmap_mcp.py -f
 python nmap_mcp.py [options]
 
 Options:
-  -f, --foreground    Run in foreground mode (default is daemon)
+  -d, --daemon        Run in daemon mode (only available with --sse)
   --sse              Enable SSE mode for web clients
   --port PORT        Port for SSE server (default: 3001)
   --host HOST        Host for SSE server (default: localhost)
@@ -266,8 +266,7 @@ Edit the configuration file to include the nmap-mcp server:
         "run",
         "--directory",
         "/path/to/nmap-mcp",
-        "nmap_mcp.py",
-        "-f"
+        "nmap_mcp.py"
       ],
       "env": {
         "UV_PROJECT_ENVIRONMENT": "/path/to/nmap-mcp/.venv"
@@ -289,8 +288,7 @@ If you prefer to use Python directly instead of uv:
     "nmap-mcp": {
       "command": "python",
       "args": [
-        "/path/to/nmap-mcp/nmap_mcp.py",
-        "-f"
+        "/path/to/nmap-mcp/nmap_mcp.py"
       ],
       "env": {
         "PYTHONPATH": "/path/to/nmap-mcp"
@@ -324,8 +322,7 @@ Once Claude Desktop restarts, you should be able to use nmap scanning capabiliti
         "run",
         "--directory",
         "/Users/username/Dev/nmap-mcp",
-        "nmap_mcp.py",
-        "-f"
+        "nmap_mcp.py"
       ]
     }
   }
@@ -338,7 +335,7 @@ Once Claude Desktop restarts, you should be able to use nmap scanning capabiliti
   "mcpServers": {
     "nmap-mcp": {
       "command": "nmap-mcp",
-      "args": ["-f"]
+      "args": []
     }
   }
 }
@@ -354,8 +351,7 @@ Once Claude Desktop restarts, you should be able to use nmap scanning capabiliti
         "run",
         "--directory",
         "/path/to/nmap-mcp",
-        "nmap_mcp.py",
-        "-f"
+        "nmap_mcp.py"
       ],
       "env": {
         "NMAP_DEFAULT_TIMING": "T4"
@@ -383,7 +379,7 @@ Once Claude Desktop restarts, you should be able to use nmap scanning capabiliti
 - Try running the server manually to test functionality:
   ```bash
   cd /path/to/nmap-mcp
-  uv run nmap_mcp.py -f
+  uv run nmap_mcp.py
   ```
 
 #### Configuration Validation
