@@ -139,3 +139,4 @@ scan_history.json
 *.gnmap
 .uv/
 uv.lock
+.claude
